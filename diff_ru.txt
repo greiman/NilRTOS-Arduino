@@ -1,0 +1,483 @@
+Only in libraries/NilRTOS: NilFIFO.h
+Only in libraries/NilRTOS: NilRTOS.c
+Only in libraries/NilRTOS: NilRTOS.h
+Only in libraries/NilRTOS: NilSerial.cpp
+Only in libraries/NilRTOS: NilSerial.h
+Only in libraries/NilRTOS: NilTwiWaitSignal.cpp
+Only in libraries/NilRTOS: avr_heap.h
+Only in libraries/NilRTOS: board.c
+Only in libraries/NilRTOS: examples
+diff -ru nilOrgFiles/nil.c libraries/NilRTOS/nil.c
+--- nilOrgFiles/nil.c	2013-07-20 10:41:51.840836900 -0700
++++ libraries/NilRTOS/nil.c	2013-08-11 08:11:36.057704800 -0700
+@@ -21,7 +21,7 @@
+  * @file    nil.c
+  * @brief   Nil RTOS main source file.
+  *
+- * @defgroup nil
++ * @defgroup nil Nil
+  * @details Nil RTOS services.
+  * @{
+  */
+@@ -40,7 +40,6 @@
+  * @brief   System variables.
+  */
+ nil_system_t nil;
+-
+ /*===========================================================================*/
+ /* Module local variables.                                                   */
+ /*===========================================================================*/
+@@ -74,7 +73,11 @@
+ 
+   /* Iterates through the list of defined threads.*/
+   for (tr = &nil.threads[0], tcp = nil_thd_configs;
++  #if WHG_MOD
++       tr < nil.idlep;
++#else  /* WHG_MOD */
+        tr < &nil.threads[NIL_CFG_NUM_THREADS];
++#endif  /* WHG_MOD */
+        tr++, tcp++) {
+     tr->state = NIL_THD_READY;
+     tr->timeout = 0;
+@@ -91,7 +94,11 @@
+   /* Runs the highest priority thread, the current one becomes the null
+      thread.*/
+   nil.current = nil.next = nil.threads;
++#if WHG_MOD
++  port_switch(nil.threads, nil.idlep);
++#else  /* WHG_MOD */
+   port_switch(nil.threads, &nil.threads[NIL_CFG_NUM_THREADS]);
++#endif  /* WHG_MOD */
+ 
+   /* Interrupts enabled for the idle thread.*/
+   nilSysEnable();
+@@ -132,7 +139,11 @@
+     nilSysUnlockFromISR();
+     tr++;
+     nilSysLockFromISR();
++#if WHG_MOD
++  } while (tr < nil.idlep);
++#else  /* WHG_MOD */
+   } while (tr < &nil.threads[NIL_CFG_NUM_THREADS]);
++#endif  /* WHG_MOD */
+ #else
+   thread_ref_t tr = &nil.threads[0];
+   systime_t next = 0;
+@@ -169,7 +180,12 @@
+     nilSysUnlockFromISR();
+     tr++;
+     nilSysLockFromISR();
++#if WHG_MOD
++  } while (tr < nil.idlep);
++#else  /* WHG_MOD */
+   } while (tr < &nil.threads[NIL_CFG_NUM_THREADS]);
++#endif  /* WHG_MOD */
++
+   nil.lasttime = nil.nexttime;
+   if (next > 0) {
+     nil.nexttime += next;
+@@ -193,7 +209,11 @@
+ thread_ref_t nilSchReadyI(thread_ref_t tr, msg_t msg) {
+ 
+   nilDbgAssert((tr >= nil.threads) &&
++#if WHG_MOD
++               (tr < nil.idlep),
++#else  /* WHG_MOD */
+                (tr < &nil.threads[NIL_CFG_NUM_THREADS]),
++#endif  /* WHG_MOD */
+                "nilSchReadyI(), #1", "pointer out of range");
+   nilDbgAssert(!NIL_THD_IS_READY(tr),
+                "nilSchReadyI(), #2", "already ready");
+@@ -220,7 +240,11 @@
+   if (ntr != otr) {
+     nil.current = ntr;
+ #if defined(NIL_CFG_IDLE_LEAVE_HOOK)
++#if WHG_MOD
++    if (otr == nil.idlep) {
++#else  /* WHG_MOD */
+     if (otr == &nil.threads[NIL_CFG_NUM_THREADS]) {
++#endif  /* WHG_MOD */
+       NIL_CFG_IDLE_LEAVE_HOOK();
+     }
+ #endif
+@@ -247,9 +271,14 @@
+  */
+ msg_t nilSchGoSleepTimeoutS(tstate_t newstate, systime_t timeout) {
+   thread_ref_t ntr, otr = nil.current;
+-
++#if WHG_MOD
++  nilDbgAssert(otr != nil.idlep,
++                "nilSchGoSleepTimeoutS(), #1", "idle cannot sleep");
++#else  /* WHG_MOD */
+   nilDbgAssert(otr != &nil.threads[NIL_CFG_NUM_THREADS],
+                "nilSchGoSleepTimeoutS(), #1", "idle cannot sleep");
++#endif  /* WHG_MOD */
++
+ 
+   /* Storing the wait object for the current thread.*/
+   otr->state = newstate;
+@@ -285,7 +314,11 @@
+     if (NIL_THD_IS_READY(ntr)) {
+       nil.current = nil.next = ntr;
+ #if defined(NIL_CFG_IDLE_ENTER_HOOK)
++#if WHG_MOD
++      if (ntr == nil.idlep) {
++#else  /* WHG_MOD */
+       if (ntr == &nil.threads[NIL_CFG_NUM_THREADS]) {
++#endif  /* WHG_MOD */
+         NIL_CFG_IDLE_ENTER_HOOK();
+       }
+ #endif
+@@ -295,8 +328,13 @@
+ 
+     /* Points to the next thread in lowering priority order.*/
+     ntr++;
++#if WHG_MOD
++    nilDbgAssert(ntr <= nil.idlep,
++                 "nilSchGoSleepTimeoutS(), #2", "pointer out of range");
++#else  /* WHG_MOD */
+     nilDbgAssert(ntr <= &nil.threads[NIL_CFG_NUM_THREADS],
+                  "nilSchGoSleepTimeoutS(), #2", "pointer out of range");
++#endif  /* WHG_MOD */
+   }
+ }
+ 
+@@ -479,10 +517,6 @@
+ 
+ /**
+  * @brief   Performs a signal operation on a semaphore.
+- * @post    This function does not reschedule so a call to a rescheduling
+- *          function must be performed before unlocking the kernel. Note that
+- *          interrupt handlers always reschedule on exit so an explicit
+- *          reschedule must not be performed in ISRs.
+  *
+  * @param[in] sp    pointer to a @p semaphore_t structure
+  *
+@@ -531,10 +565,6 @@
+  * @post    After invoking this function all the threads waiting on the
+  *          semaphore, if any, are released and the semaphore counter is set
+  *          to the specified, non negative, value.
+- * @post    This function does not reschedule so a call to a rescheduling
+- *          function must be performed before unlocking the kernel. Note that
+- *          interrupt handlers always reschedule on exit so an explicit
+- *          reschedule must not be performed in ISRs.
+  *
+  * @param[in] sp        pointer to a @p semaphore_t structure
+  * @param[in] n         the new value of the semaphore counter. The value must
+diff -ru nilOrgFiles/nil.h libraries/NilRTOS/nil.h
+--- nilOrgFiles/nil.h	2013-07-20 10:41:58.970049400 -0700
++++ libraries/NilRTOS/nil.h	2013-07-20 11:40:17.398201700 -0700
+@@ -116,6 +116,7 @@
+ /* Module pre-compile time settings.                                         */
+ /*===========================================================================*/
+ 
++#if !WHG_MOD
+ /**
+  * @brief   Number of user threads in the application.
+  * @note    This number is not inclusive of the idle thread which is
+@@ -124,6 +125,7 @@
+ #if !defined(NIL_CFG_NUM_THREADS) || defined(__DOXYGEN__)
+ #define NIL_CFG_NUM_THREADS                 2
+ #endif
++#endif /* WHG_MOD */
+ 
+ /**
+  * @brief   System timer resolution in Hz.
+@@ -163,6 +165,7 @@
+ /* Derived constants and error checks.                                       */
+ /*===========================================================================*/
+ 
++#if !WHG_MOD
+ #if NIL_CFG_NUM_THREADS < 1
+ #error "at least one thread must be defined"
+ #endif
+@@ -171,6 +174,7 @@
+ #error "Nil is not recommended for thread-intensive applications, consider" \
+        "ChibiOS/RT instead"
+ #endif
++#endif  / *WHG_MOD */
+ 
+ #if NIL_CFG_FREQUENCY <= 0
+ #error "invalid NIL_CFG_FREQUENCY specified"
+@@ -180,7 +184,8 @@
+ #error "invalid NIL_CFG_TIMEDELTA specified"
+ #endif
+ 
+-#if NIL_CFG_ENABLE_ASSERTS
++#if NIL_CFG_ENABLE_ASSERTS  || defined(__DOXYGEN__)
++/** enable debuging */
+ #define NIL_DBG_ENABLED                 TRUE
+ #else
+ #define NIL_DBG_ENABLED                 FALSE
+@@ -274,6 +279,7 @@
+    * @brief   System time.
+    */
+   systime_t         systime;
++  
+ #endif
+ #if NIL_CFG_TIMEDELTA > 0 || defined(__DOXYGEN__)
+   /**
+@@ -285,10 +291,21 @@
+    */
+   systime_t         nexttime;
+ #endif
++#if WHG_MOD
++ /**
++   * @brief   Pointer to thread structures for all the defined threads.
++   */
++  thread_t * const    threads;
++  /**
++   * @brief   Pointer to idle thread.
++   */
++  thread_t  * const   idlep;
++#else  /* WHG_MOD */
+   /**
+    * @brief   Thread structures for all the defined threads.
+    */
+   thread_t          threads[NIL_CFG_NUM_THREADS + 1];
++#endif  /* WHG_MOD */
+ #if NIL_DBG_ENABLED || defined(__DOXYGEN__)
+   /**
+    * @brief   Panic message.
+@@ -310,9 +327,13 @@
+ /**
+  * @brief   Start of user threads table.
+  */
++#if WHG_MOD
++#define NIL_THREADS_TABLE_BEGIN()                                           \
++  const thread_config_t nil_thd_configs[] = {
++#else  /* WHG_MOD */
+ #define NIL_THREADS_TABLE_BEGIN()                                           \
+   const thread_config_t nil_thd_configs[NIL_CFG_NUM_THREADS + 1] = {
+-
++#endif  /* WHG_MOD */
+ /**
+  * @brief   Entry of user threads table
+  */
+@@ -322,10 +343,19 @@
+ /**
+  * @brief   End of user threads table.
+  */
++#if WHG_MOD
++#define NIL_THREADS_TABLE_END()                                             \
++  {"idle", 0, NULL, NULL, 0}                                                \
++};                                                                          \
++static thread_t nil_threads[sizeof(nil_thd_configs)/sizeof(thread_config_t)];  \
++nil_system_t nil = {0, 0, 0, nil_threads,                                      \
++&nil_threads[sizeof(nil_thd_configs)/sizeof(thread_config_t) - 1]};            \
++const uint8_t nil_thd_count = sizeof(nil_thd_configs)/sizeof(thread_config_t) - 1;
++#else  /* WHG_MOD */
+ #define NIL_THREADS_TABLE_END()                                             \
+   {"idle", 0, NULL, NULL, 0}                                                \
+ };
+-
++#endif  /* WHG_MOD */
+ /** @} */
+ 
+ /**
+@@ -449,9 +479,13 @@
+  *
+  * @sclass
+  */
++#if WHG_FIX
++#define nilThdSleepUntilS(time)                                             \
++  nilSchGoSleepTimeoutS(NIL_THD_SLEEPING, (time) - nilTimeNowI())
++#else  // WHG_FIX
+ #define nilThdSleepUntilS(time)                                             \
+   nilSchGoSleepTimeoutS(NIL_THD_SLEEPING, (time) - nilTimeNow())
+-
++#endif  // WHG_FIX
+ /**
+  * @brief   Initializes a semaphore with the specified counter value.
+  *
+@@ -666,7 +700,12 @@
+ 
+ #if !defined(__DOXYGEN__)
+ extern nil_system_t nil;
++#if WHG_MOD
++extern const thread_config_t nil_thd_configs[];
++extern const uint8_t nil_thd_count;
++#else  /* WHG_MOD */
+ extern const thread_config_t nil_thd_configs[NIL_CFG_NUM_THREADS + 1];
++#endif  /* WHG_MOD */
+ #endif
+ 
+ #ifdef __cplusplus
+@@ -681,7 +720,9 @@
+   void nilThdResumeI(thread_ref_t *trp, msg_t msg);
+   void nilThdSleep(systime_t time);
+   void nilThdSleepUntil(systime_t time);
+-  systime_t nilTimeNow(void);
++#if WHG_FIX
++  systime_t nilTimeNow();
++#endif  // WHG_FIX
+   bool nilTimeNowIsWithin(systime_t start, systime_t end);
+   msg_t nilSemWaitTimeout(semaphore_t *sp, systime_t time);
+   msg_t nilSemWaitTimeoutS(semaphore_t *sp, systime_t time);
+Only in libraries/NilRTOS: nilUtility.cpp
+diff -ru nilOrgFiles/nilconf.h libraries/NilRTOS/nilconf.h
+--- nilOrgFiles/nilconf.h	2013-07-20 10:44:07.592276900 -0700
++++ libraries/NilRTOS/nilconf.h	2013-07-19 11:40:20.670704200 -0700
+@@ -30,6 +30,15 @@
+ 
+ #ifndef _NILCONF_H_
+ #define _NILCONF_H_
++/**
++ * @brief   Problem fixes.
++ */
++#define WHG_FIX TRUE
++
++/**
++ * @brief   Use mods for Arduino library.
++ */
++#define WHG_MOD TRUE
+ 
+ /**
+  * @brief   Number of user threads in the application.
+@@ -41,17 +50,17 @@
+ /**
+  * @brief   System tick frequency.
+  */
+-#define NIL_CFG_FREQUENCY                   50000
++#define NIL_CFG_FREQUENCY                   (F_CPU/16384L)
+ 
+ /**
+  * @brief   Time delta constant for the tick-less mode.
+  * @note    If this value is zero then the system uses the classic
+  *          periodic tick. This value represents the minimum number
+  *          of ticks that is safe to specify in a timeout directive.
+- *          The value one is not valid, timeouts are rounded up to
++ *          The value one is not valid, timeouts are rounder up to
+  *          this value.
+  */
+-#define NIL_CFG_TIMEDELTA                   2
++#define NIL_CFG_TIMEDELTA                   0
+ 
+ /**
+  * @brief   System assertions.
+diff -ru nilOrgFiles/nilcore.c libraries/NilRTOS/nilcore.c
+--- nilOrgFiles/nilcore.c	2013-07-20 10:42:30.513304800 -0700
++++ libraries/NilRTOS/nilcore.c	2013-07-19 11:52:07.655947900 -0700
+@@ -18,10 +18,10 @@
+ */
+ 
+ /**
+- * @file    GCC/AVR/nilcore.c
++ * @file    nilcore.c
+  * @brief   Nil RTOS AVR port main source file.
+  *
+- * @defgroup AVR_CORE
++ * @defgroup AVR_CORE AVR core
+  * @{
+  */
+ 
+diff -ru nilOrgFiles/nilcore.h libraries/NilRTOS/nilcore.h
+--- nilOrgFiles/nilcore.h	2013-07-20 10:42:37.018516300 -0700
++++ libraries/NilRTOS/nilcore.h	2013-07-16 13:31:34.645892000 -0700
+@@ -18,10 +18,10 @@
+ */
+ 
+ /**
+- * @file    GCC/AVR/nilcore.h
++ * @file    nilcore.h
+  * @brief   Nil RTOS AVR port main header file.
+  *
+- * @addtogroup AVR_CORE
++ * @addtogroup AVR_CORE   AVR core
+  * @{
+  */
+ 
+@@ -85,6 +85,9 @@
+   uint8_t       sr;
+   uint8_t       r1;
+   uint8_t       r0;
++#ifdef __AVR_3_BYTE_PC__
++  uint8_t       pcx;
++#endif  /* __AVR_3_BYTE_PC_ */
+   uint16_t      pc;
+ };
+ 
+@@ -115,6 +118,9 @@
+   uint8_t       r4;
+   uint8_t       r3;
+   uint8_t       r2;
++#ifdef __AVR_3_BYTE_PC__
++  uint8_t       pcx;
++#endif  /* __AVR_3_BYTE_PC__ */
+   uint8_t       pcl;
+   uint8_t       pch;
+ };
+@@ -128,17 +134,30 @@
+  * @details This code usually setup the context switching frame represented
+  *          by an @p intctx structure.
+  */
+-#define SETUP_CONTEXT(tp, workspace, wsize, pf, arg) {                      \
+-  (tp)->p_ctx.sp = (struct port_intctx *)((uint8_t *)workspace + wsize  -   \
+-                                          sizeof(struct port_intctx));      \
+-  (tp)->p_ctx.sp->r2  = (uint8_t)pf;                                        \
+-  (tp)->p_ctx.sp->r3  = (uint8_t)((unsigned)pf >> 8);                       \
+-  (tp)->p_ctx.sp->r4  = (uint8_t)arg;                                       \
+-  (tp)->p_ctx.sp->r5  = (uint8_t)((unsigned)arg >> 8);                      \
+-  (tp)->p_ctx.sp->pcl = (uint8_t)((unsigned)_port_thread_start >> 8);       \
+-  (tp)->p_ctx.sp->pch = (uint8_t)_port_thread_start;                        \
++#ifndef __AVR_3_BYTE_PC__
++#define SETUP_CONTEXT(tp, workspace, wsize, pf, arg) {                  \
++  (tp)->ctxp = (struct port_intctx *)((uint8_t *)workspace + wsize  -   \
++                                          sizeof(struct port_intctx));  \
++  (tp)->ctxp->r2  = (uint8_t)pf;                                        \
++  (tp)->ctxp->r3  = (uint8_t)((unsigned)pf >> 8);                       \
++  (tp)->ctxp->r4  = (uint8_t)arg;                                       \
++  (tp)->ctxp->r5  = (uint8_t)((unsigned)arg >> 8);                      \
++  (tp)->ctxp->pcl = (uint8_t)((unsigned)_port_thread_start >> 8);       \
++  (tp)->ctxp->pch = (uint8_t)_port_thread_start;                        \
+ }
+-
++#else  /* __AVR_3_BYTE_PC__ */
++#define SETUP_CONTEXT(tp, workspace, wsize, pf, arg) {                  \
++  (tp)->ctxp = (struct port_intctx *)((uint8_t *)workspace + wsize  -   \
++                                          sizeof(struct port_intctx));  \
++  (tp)->ctxp->r2  = (uint8_t)pf;                                        \
++  (tp)->ctxp->r3  = (uint8_t)((unsigned)pf >> 8);                       \
++  (tp)->ctxp->r4  = (uint8_t)arg;                                       \
++  (tp)->ctxp->r5  = (uint8_t)((unsigned)arg >> 8);                      \
++  (tp)->ctxp->pcx = 0;                                                  \
++  (tp)->ctxp->pcl = (uint8_t)((unsigned)_port_thread_start >> 8);       \
++  (tp)->ctxp->pch = (uint8_t)_port_thread_start;                        \
++}
++#endif  /* __AVR_3_BYTE_PC__ */
+ /**
+  * @brief   Enforces a correct alignment for a stack area size value.
+  */
+@@ -181,9 +200,9 @@
+  *          enabled to invoke system APIs.
+  */
+ #define PORT_IRQ_EPILOGUE() {                                               \
+-  nilSysLockFromIsr();                                                      \
++  nilSysLockFromISR();                                                      \
+   nilSchRescheduleS();                                                      \
+-  nilSysUnlockFromIsr();                                                    \
++  nilSysUnlockFromISR();                                                    \
+ }
+ 
+ /**
+diff -ru nilOrgFiles/niltypes.h libraries/NilRTOS/niltypes.h
+--- nilOrgFiles/niltypes.h	2013-07-20 10:42:42.681326200 -0700
++++ libraries/NilRTOS/niltypes.h	2013-07-16 13:32:13.521160300 -0700
+@@ -18,7 +18,7 @@
+ */
+ 
+ /**
+- * @file    GCC/AVR/niltypes.h
++ * @file    niltypes.h
+  * @brief   Nil RTOS types header file.
+  *
+  * @addtogroup AVR_TYPES
+@@ -39,7 +39,7 @@
+ typedef uint8_t         tstate_t;   /**< @brief Type of a thread state.     */
+ typedef int16_t         msg_t;      /**< @brief Type of a message.          */
+ typedef uint16_t        systime_t;  /**< @brief Type of system time.        */
+-typedef int8_t          cnt_t;      /**< @brief Type of signed counter.     */
++typedef int16_t         cnt_t;      /**< @brief Type of signed counter.     */
+ /** @} */
+ 
+ #endif /* _NILTYPES_H_ */
