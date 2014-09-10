@@ -31,7 +31,7 @@
 #include "nil.h"
 //------------------------------------------------------------------------------
 /** NilRTOS version YYYYMMDD */
-#define NIL_RTOS_VERSION 20140816
+#define NIL_RTOS_VERSION 20140909
 //------------------------------------------------------------------------------
 #if NIL_CFG_TIMEDELTA
 #error tick-less mode is not supported
