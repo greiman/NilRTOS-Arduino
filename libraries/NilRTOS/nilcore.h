@@ -285,8 +285,8 @@ struct port_intctx {
  * @param[in] ntp       the thread to be switched in
  * @param[in] otp       the thread to be switched out
  */
-#define port_switch(ntp, otp) _port_switch(ntp, otp)
-
+#define port_switch(ntp, otp) {_port_switch(ntp, otp); \
+                               asm volatile ("" : : : "memory");}
 /*===========================================================================*/
 /* External declarations.                                                    */
 /*===========================================================================*/

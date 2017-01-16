@@ -1,3 +1,7 @@
+Try the new version of ChibiOS/Nil.  It has major improvements and a new API.
+
+https://github.com/greiman/ChNil
+
 NilRTOS is a tiny RTOS library for AVR Arduino boards.
 
 The base code for NilRTOS was written by Giovanni Di Sirio, the author
